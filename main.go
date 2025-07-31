@@ -33,7 +33,7 @@ var queries *dbpayments.Queries
 func main() {
 
 	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, "host=localhost user=postgres dbname=dbpayments password=postgres")
+	conn, err := pgx.Connect(ctx, "host=db user=postgres password=postgres dbname=dbpayments sslmode=disable")
 	if err != nil {
 		log.Printf("Unable to connect to database: %v\n", err)
 		return
@@ -44,7 +44,7 @@ func main() {
 	go func() {
 		http.HandleFunc("POST /payments", paymentsHandler)
 		http.HandleFunc("GET /payments-summary", paymentsSummaryHandler)
-		log.Fatal(http.ListenAndServe(":9999", nil))
+		log.Fatal(http.ListenAndServe(":8080", nil))
 	}()
 
 	for {
@@ -61,7 +61,7 @@ func main() {
 }
 
 var httpClient = &http.Client{
-	Timeout: 200 * time.Millisecond,
+	Timeout: 500 * time.Millisecond,
 }
 
 func makePayment(baseUrl string, request *PaymentRequest) error {
@@ -96,7 +96,7 @@ func makePayment(baseUrl string, request *PaymentRequest) error {
 }
 
 func makePaymentMain(request *PaymentRequest) {
-	err := makePayment("http://localhost:8001", request)
+	err := makePayment("http://payment-processor-default:8080", request)
 	if err != nil {
 		if *request.Attempts > 3 {
 			fallbackQueue <- request
@@ -111,7 +111,7 @@ func makePaymentMain(request *PaymentRequest) {
 }
 
 func makePaymentFallback(request *PaymentRequest) {
-	err := makePayment("http://localhost:8002", request)
+	err := makePayment("http://payment-processor-fallback:8080", request)
 	if err != nil {
 		log.Printf("Failed to process payment after fallback: %v", err)
 		return
