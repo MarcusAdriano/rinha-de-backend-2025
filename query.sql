@@ -7,3 +7,6 @@ GROUP BY api;
 -- name: InsertPayment :exec
 INSERT INTO payments (correlationId, amount, requested_at, api)
 VALUES ($1, $2, $3, $4);
+
+-- name: PurgePayments :exec
+TRUNCATE TABLE payments;

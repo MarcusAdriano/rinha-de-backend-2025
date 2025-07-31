@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"io/ioutil"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"rinha-de-backend-2025/dbpayments"
 	"strconv"
 	"time"
@@ -21,6 +23,15 @@ const (
 	ApiFallback = 1
 )
 
+var (
+	MainProcessor     = "http://localhost:8001"
+	FallbackProcessor = "http://localhost:8002"
+	DatabaseUrl       = "postgres://postgres:postgres@localhost:5432/dbpayments?pool_max_conns=6&pool_min_conns=6&pool_max_conn_lifetime=330s"
+	mainQueue         = make(chan *PaymentRequest, 750_000)
+	fallbackQueue     = make(chan *PaymentRequest, 750_000)
+	queries           *dbpayments.Queries
+)
+
 type PaymentRequest struct {
 	CorrelationId string  `json:"correlationId,omitempty"`
 	Amount        float64 `json:"amount,omitempty"`
@@ -28,24 +39,63 @@ type PaymentRequest struct {
 	Attempts      *int
 }
 
-var queries *dbpayments.Queries
+func createDatabaseConnection(connectionString string) *dbpayments.Queries {
+	config, err := pgxpool.ParseConfig(connectionString)
+	if err != nil {
+		log.Printf("Error parsing connection string: %+v", err)
+		panic(err)
+	}
+
+	hostname, _ := os.Hostname()
+	appName := "rinha-2025-" + hostname
+
+	config.ConnConfig.Config.ConnectTimeout = time.Second * 1
+	config.ConnConfig.RuntimeParams["application_name"] = appName
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		log.Printf("Error connecting to database: %+v", err)
+		panic(err)
+	}
+
+	return dbpayments.New(pool)
+}
 
 func main() {
 
-	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, "host=db user=postgres password=postgres dbname=dbpayments sslmode=disable")
-	if err != nil {
-		log.Printf("Unable to connect to database: %v\n", err)
-		return
+	mainProcessorUrl := os.Getenv("MAIN_PROCESSOR_URL")
+	if mainProcessorUrl != "" {
+		MainProcessor = mainProcessorUrl
+		log.Printf("Using main processor URL: %s\n", MainProcessor)
+	} else {
+		log.Printf("MAIN_PROCESSOR_URL is NULL: Using default main processor URL: %s\n", MainProcessor)
 	}
-	defer conn.Close(ctx)
-	queries = dbpayments.New(conn)
+
+	fallbackProcessorUrl := os.Getenv("FALLBACK_PROCESSOR_URL")
+	if fallbackProcessorUrl != "" {
+		FallbackProcessor = fallbackProcessorUrl
+		log.Printf("Using fallback processor URL: %s\n", FallbackProcessor)
+	} else {
+		log.Printf("FALLBACK_PROCESSOR_URL is NULL: Using default fallback processor URL: %s\n", FallbackProcessor)
+	}
+
+	connectionString := os.Getenv("DATABASE_URL")
+	if connectionString != "" {
+		DatabaseUrl = connectionString
+		log.Printf("Using database URL: %s\n", DatabaseUrl)
+	} else {
+		log.Printf("DATABASE_URL is NULL: Using default database URL: %s\n", DatabaseUrl)
+	}
+
+	queries = createDatabaseConnection(DatabaseUrl)
 
 	go func() {
 		http.HandleFunc("POST /payments", paymentsHandler)
 		http.HandleFunc("GET /payments-summary", paymentsSummaryHandler)
+		http.HandleFunc("POST /purge-payments", purgeDatabaseHandler)
 		log.Fatal(http.ListenAndServe(":8080", nil))
 	}()
+
+	log.Printf("Running payment processor...\n")
 
 	for {
 		select {
@@ -61,7 +111,7 @@ func main() {
 }
 
 var httpClient = &http.Client{
-	Timeout: 500 * time.Millisecond,
+	Timeout: 100 * time.Millisecond,
 }
 
 func makePayment(baseUrl string, request *PaymentRequest) error {
@@ -88,7 +138,7 @@ func makePayment(baseUrl string, request *PaymentRequest) error {
 		return errors.New(res.Status)
 	}
 
-	_, err = ioutil.ReadAll(res.Body)
+	_, err = io.ReadAll(res.Body)
 	if err != nil {
 		return err
 	}
@@ -96,28 +146,41 @@ func makePayment(baseUrl string, request *PaymentRequest) error {
 }
 
 func makePaymentMain(request *PaymentRequest) {
-	err := makePayment("http://payment-processor-default:8080", request)
+	err := makePayment(MainProcessor, request)
 	if err != nil {
+		//log.Printf("[main processor] Unable to make payment: %v\n", err)
 		if *request.Attempts > 3 {
-			fallbackQueue <- request
+			go func() {
+				time.Sleep(time.Duration(*request.Attempts) * time.Second)
+				fallbackQueue <- request
+			}()
 			return
 		}
 		*request.Attempts++
-		mainQueue <- request
+		go func() {
+			time.Sleep(time.Duration(*request.Attempts) * time.Second)
+			mainQueue <- request
+		}()
 		return
 	}
 
-	insertPaymentToDB(ApiMain, request)
+	err = insertPaymentToDB(ApiMain, request)
+	if err != nil {
+		log.Printf("[main processor] Unable to insert payment: %v\n", err)
+	}
 }
 
 func makePaymentFallback(request *PaymentRequest) {
-	err := makePayment("http://payment-processor-fallback:8080", request)
+	err := makePayment(FallbackProcessor, request)
 	if err != nil {
-		log.Printf("Failed to process payment after fallback: %v", err)
+		//log.Printf("[fallback processor] Unable to make payment: %v", err)
 		return
 	}
 
-	insertPaymentToDB(ApiFallback, request)
+	err = insertPaymentToDB(ApiFallback, request)
+	if err != nil {
+		log.Printf("[fallback processor] Unable to insert payment: %v\n", err)
+	}
 }
 
 func insertPaymentToDB(apiVersion int32, request *PaymentRequest) error {
@@ -134,13 +197,10 @@ func insertPaymentToDB(apiVersion int32, request *PaymentRequest) error {
 	return queries.InsertPayment(context.Background(), dbpayments.InsertPaymentParams{
 		Correlationid: id,
 		Amount:        amount,
-		RequestedAt:   request.RequestedDate,
+		RequestedAt:   request.RequestedDate.UTC(),
 		Api:           apiVersion,
 	})
 }
-
-var mainQueue = make(chan *PaymentRequest, 500_000)
-var fallbackQueue = make(chan *PaymentRequest, 500_000)
 
 func paymentsHandler(w http.ResponseWriter, r *http.Request) {
 	var request PaymentRequest
@@ -157,7 +217,8 @@ func paymentsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if request.CorrelationId == "" {
+	_, err = uuid.Parse(request.CorrelationId)
+	if request.CorrelationId == "" || err != nil {
 		http.Error(w, "Invalid correlation id", http.StatusUnprocessableEntity)
 		return
 	}
@@ -198,9 +259,11 @@ func paymentsSummaryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("Fetching payments summary from: %v, to: %v\n", fromTime, toTime)
+
 	summary, err := queries.GetSummaryApiUsage(context.Background(), dbpayments.GetSummaryApiUsageParams{
-		Pfrom: fromTime,
-		Pto:   toTime,
+		Pfrom: fromTime.UTC(),
+		Pto:   toTime.UTC(),
 	})
 	if err != nil {
 		http.Error(w, "Error fetching summary", http.StatusInternalServerError)
@@ -237,4 +300,41 @@ func paymentsSummaryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Write(jsonResponse)
+}
+
+func purgeDatabaseHandler(w http.ResponseWriter, r *http.Request) {
+	err := queries.PurgePayments(context.TODO())
+	if err != nil {
+		log.Printf("Error purging database: %v\n", err)
+	}
+
+	purgePaymentProcessors(MainProcessor)
+	purgePaymentProcessors(FallbackProcessor)
+}
+
+func purgePaymentProcessors(host string) {
+	url := host + "/admin/purge-payments"
+	method := "POST"
+
+	req, err := http.NewRequest(method, url, nil)
+
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	req.Header.Add("x-rinha-token", "123")
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	log.Printf("%s -> %s\n", url, string(body))
 }

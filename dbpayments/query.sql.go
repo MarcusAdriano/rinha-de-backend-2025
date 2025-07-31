@@ -72,3 +72,12 @@ func (q *Queries) InsertPayment(ctx context.Context, arg InsertPaymentParams) er
 	)
 	return err
 }
+
+const purgePayments = `-- name: PurgePayments :exec
+TRUNCATE TABLE payments
+`
+
+func (q *Queries) PurgePayments(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, purgePayments)
+	return err
+}
