@@ -149,7 +149,7 @@ func makePaymentMain(request *PaymentRequest) {
 	err := makePayment(MainProcessor, request)
 	if err != nil {
 		//log.Printf("[main processor] Unable to make payment: %v\n", err)
-		if *request.Attempts > 3 {
+		if errors.Is(err, context.DeadlineExceeded) || *request.Attempts > 3 {
 			go func() {
 				time.Sleep(time.Duration(*request.Attempts) * time.Second)
 				fallbackQueue <- request

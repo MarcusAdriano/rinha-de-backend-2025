@@ -20,7 +20,7 @@ services:
         window: 5s
       resources:
         limits:
-          cpus: '0.25'
+          cpus: '0.5'
           memory: '100MB'
 
   api2: # API - Instância 02
@@ -44,8 +44,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: '100MB'
+          cpus: '0.25'
+          memory: '50MB'
 
   db: # Banco de dados
     image: postgres:17-alpine
@@ -73,8 +73,8 @@ services:
         window: 5s
       resources:
         limits:
-          cpus: '0.5'
-          memory: '50MB'
+          cpus: '0.25'
+          memory: '100MB'
 
 networks:
   rinha:
