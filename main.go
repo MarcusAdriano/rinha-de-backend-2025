@@ -33,9 +33,9 @@ var (
 )
 
 type PaymentRequest struct {
-	CorrelationId string  `json:"correlationId,omitempty"`
-	Amount        float64 `json:"amount,omitempty"`
-	RequestedDate time.Time
+	CorrelationId string    `json:"correlationId,omitempty"`
+	Amount        float64   `json:"amount,omitempty"`
+	RequestedAt   time.Time `json:"requestedAt,omitempty"`
 	Attempts      *int
 }
 
@@ -100,11 +100,11 @@ func main() {
 	for {
 		select {
 		case request := <-mainQueue:
-			request.RequestedDate = time.Now()
+			request.RequestedAt = time.Now()
 			makePaymentMain(request)
 
 		case request := <-fallbackQueue:
-			request.RequestedDate = time.Now()
+			request.RequestedAt = time.Now()
 			makePaymentFallback(request)
 		}
 	}
@@ -197,7 +197,7 @@ func insertPaymentToDB(apiVersion int32, request *PaymentRequest) error {
 	return queries.InsertPayment(context.Background(), dbpayments.InsertPaymentParams{
 		Correlationid: id,
 		Amount:        amount,
-		RequestedAt:   request.RequestedDate.UTC(),
+		RequestedAt:   request.RequestedAt.UTC(),
 		Api:           apiVersion,
 	})
 }
@@ -242,21 +242,27 @@ func paymentsSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	from := query.Get("from")
 	to := query.Get("to")
 
-	if from == "" || to == "" {
-		http.Error(w, "Missing 'from' or 'to' query parameters", http.StatusUnprocessableEntity)
-		return
+	var toTime, fromTime time.Time
+	var err error
+
+	if from == "" {
+		from = time.Now().AddDate(0, 0, -1).Format(time.RFC3339)
+	} else {
+		fromTime, err = time.Parse(time.RFC3339, from)
+		if err != nil {
+			http.Error(w, "Invalid 'from' date format", http.StatusUnprocessableEntity)
+			return
+		}
 	}
 
-	fromTime, err := time.Parse(time.RFC3339, from)
-	if err != nil {
-		http.Error(w, "Invalid 'from' date format", http.StatusUnprocessableEntity)
-		return
-	}
-
-	toTime, err := time.Parse(time.RFC3339, to)
-	if err != nil {
-		http.Error(w, "Invalid 'to' date format", http.StatusUnprocessableEntity)
-		return
+	if to == "" {
+		to = time.Now().AddDate(0, 0, 1).Format(time.RFC3339)
+	} else {
+		toTime, err = time.Parse(time.RFC3339, to)
+		if err != nil {
+			http.Error(w, "Invalid 'to' date format", http.StatusUnprocessableEntity)
+			return
+		}
 	}
 
 	log.Printf("Fetching payments summary from: %v, to: %v\n", fromTime, toTime)
