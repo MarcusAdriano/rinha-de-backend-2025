@@ -111,7 +111,7 @@ func main() {
 }
 
 var httpClient = &http.Client{
-	Timeout: 100 * time.Millisecond,
+	//Timeout: 100 * time.Millisecond,
 }
 
 func makePayment(baseUrl string, request *PaymentRequest) error {
@@ -147,39 +147,48 @@ func makePayment(baseUrl string, request *PaymentRequest) error {
 
 func makePaymentMain(request *PaymentRequest) {
 	err := makePayment(MainProcessor, request)
-	if err != nil {
-		//log.Printf("[main processor] Unable to make payment: %v\n", err)
-		if errors.Is(err, context.DeadlineExceeded) || *request.Attempts > 3 {
-			go func() {
-				time.Sleep(time.Duration(*request.Attempts) * time.Second)
-				fallbackQueue <- request
-			}()
-			return
+	if err == nil {
+		err = insertPaymentToDB(ApiMain, request)
+		if err != nil {
+			log.Printf("[main processor] Unable to insert payment: %v\n", err)
 		}
-		*request.Attempts++
-		go func() {
-			time.Sleep(time.Duration(*request.Attempts) * time.Second)
-			mainQueue <- request
-		}()
 		return
 	}
 
-	err = insertPaymentToDB(ApiMain, request)
-	if err != nil {
-		log.Printf("[main processor] Unable to insert payment: %v\n", err)
+	// 3 fails, try fallback processor
+	if *request.Attempts > 3 {
+		go func() {
+			time.Sleep(time.Duration(*request.Attempts) * time.Second)
+			fallbackQueue <- request
+		}()
+		return
 	}
+	// Retry logic: increment attempts and requeue
+	*request.Attempts++
+
+	// timeout error handling
+	//if errors.Is(err, context.DeadlineExceeded) {
+	//	go func() {
+	//		// If the request times out, we wait for 2 seconds and then requeue it to the main queue
+	//		time.Sleep(2 * time.Second)
+	//		mainQueue <- request
+	//	}()
+	//	return
+	//}
+
+	go func() {
+		time.Sleep(time.Duration(*request.Attempts) * time.Second)
+		mainQueue <- request
+	}()
 }
 
 func makePaymentFallback(request *PaymentRequest) {
 	err := makePayment(FallbackProcessor, request)
-	if err != nil {
-		//log.Printf("[fallback processor] Unable to make payment: %v", err)
-		return
-	}
-
-	err = insertPaymentToDB(ApiFallback, request)
-	if err != nil {
-		log.Printf("[fallback processor] Unable to insert payment: %v\n", err)
+	if err == nil {
+		err = insertPaymentToDB(ApiFallback, request)
+		if err != nil {
+			log.Printf("[fallback processor] Unable to insert payment: %v\n", err)
+		}
 	}
 }
 
@@ -246,7 +255,7 @@ func paymentsSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if from == "" {
-		from = time.Now().AddDate(0, 0, -1).Format(time.RFC3339)
+		fromTime = time.Now().AddDate(0, 0, -1)
 	} else {
 		fromTime, err = time.Parse(time.RFC3339, from)
 		if err != nil {
@@ -256,7 +265,7 @@ func paymentsSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if to == "" {
-		to = time.Now().AddDate(0, 0, 1).Format(time.RFC3339)
+		toTime = time.Now().AddDate(0, 0, 1)
 	} else {
 		toTime, err = time.Parse(time.RFC3339, to)
 		if err != nil {

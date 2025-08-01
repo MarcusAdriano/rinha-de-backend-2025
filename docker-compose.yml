@@ -3,7 +3,7 @@ services:
     build: .
     hostname: api1
     environment:
-      - DATABASE_URL=postgres://postgres:postgres@db:5432/dbpayments?pool_max_conns=6&pool_min_conns=6&pool_max_conn_lifetime=330s
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/dbpayments?pool_max_conns=10&pool_min_conns=10&pool_max_conn_lifetime=330s
       - MAIN_PROCESSOR_URL=http://payment-processor-default:8080
       - FALLBACK_PROCESSOR_URL=http://payment-processor-fallback:8080
     networks:
