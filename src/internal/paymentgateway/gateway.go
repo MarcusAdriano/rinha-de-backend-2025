@@ -19,19 +19,19 @@ type PaymentGateway interface {
 	HealthCheck() (*HealthCheckResponse, error)
 }
 
-type PaymentGatewayImpl struct {
+type paymentGatewayImpl struct {
 	baseUrl    string
 	httpClient *http.Client
 }
 
 func NewGateway(host string, client *http.Client) PaymentGateway {
-	return &PaymentGatewayImpl{
+	return &paymentGatewayImpl{
 		baseUrl:    host,
 		httpClient: client,
 	}
 }
 
-func (g *PaymentGatewayImpl) Process(payment model.PaymentParams) error {
+func (g *paymentGatewayImpl) Process(payment model.PaymentParams) error {
 	url := g.baseUrl + "/payments"
 	method := "POST"
 
@@ -71,7 +71,7 @@ func IsHttpError(err error) bool {
 
 var errHealthCheckHttpNotOk = errors.New("payment paymentgateway return status code different than 200 OK")
 
-func (g *PaymentGatewayImpl) HealthCheck() (*HealthCheckResponse, error) {
+func (g *paymentGatewayImpl) HealthCheck() (*HealthCheckResponse, error) {
 	url := g.baseUrl + "/payments/service-health"
 	method := "GET"
 
