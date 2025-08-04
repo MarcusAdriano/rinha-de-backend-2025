@@ -150,7 +150,7 @@ func makePaymentMain(request *PaymentRequest) {
 	// timeout error handling
 	if errors.Is(err, context.DeadlineExceeded) {
 		go func() {
-			maxAttempts := 5
+			maxAttempts := 20
 			success := false
 
 			for attempts := 0; attempts < maxAttempts; attempts++ {
@@ -170,7 +170,7 @@ func makePaymentMain(request *PaymentRequest) {
 					break
 				}
 
-				time.Sleep(time.Second)
+				time.Sleep(time.Millisecond * 100)
 			}
 
 			if !success {
