@@ -26,8 +26,8 @@ var (
 	MainProcessorBaseUrl     = "http://localhost:8001"
 	FallbackProcessorBaseUrl = "http://localhost:8002"
 	DatabaseUrl              = "postgres://postgres:postgres@localhost:5432/dbpayments?pool_max_conns=6&pool_min_conns=6&pool_max_conn_lifetime=330s"
-	mainQueue                = make(chan *PaymentRequest, 750_000)
-	fallbackQueue            = make(chan *PaymentRequest, 750_000)
+	mainQueue                = make(chan *PaymentRequest, 2_500_000)
+	fallbackQueue            = make(chan *PaymentRequest, 2_500_000)
 	queries                  *dbpayments.Queries
 	mainProcessor            paymentgateway.PaymentGateway
 	fallBackProcessor        paymentgateway.PaymentGateway
