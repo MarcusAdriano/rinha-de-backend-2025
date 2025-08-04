@@ -1,4 +1,4 @@
-package gateway
+package paymentgateway
 
 import (
 	"bytes"
@@ -69,7 +69,7 @@ func IsHttpError(err error) bool {
 	return false
 }
 
-var errHealthCheckHttpNotOk = errors.New("payment gateway return status code different than 200 OK")
+var errHealthCheckHttpNotOk = errors.New("payment paymentgateway return status code different than 200 OK")
 
 func (g *PaymentGatewayImpl) HealthCheck() (*HealthCheckResponse, error) {
 	url := g.baseUrl + "/payments/service-health"
